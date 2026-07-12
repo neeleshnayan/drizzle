@@ -8,30 +8,9 @@
  */
 import { NextRequest, NextResponse } from "next/server";
 import { resolveUserId } from "@/lib/auth/user";
-import { rankMatchesWithMeta, pickSpectrum, type RankedJob, type RankOutcome } from "@/lib/opportunities/recommend";
-import { TRUSTED_MODELS } from "@/lib/jobs/vectorize";
+import { rankMatchesWithMeta, rankViaEdge, pickSpectrum, type RankedJob } from "@/lib/opportunities/recommend";
 import { canonSkillKey } from "@/lib/skills/canon";
 import { getLearnedSkillCasing, displaySkillSmart } from "@/lib/skills/learned";
-
-/**
- * On Cloudflare the ranking blend runs in the Supabase Edge Function `rank`
- * (where the data lives) — the Worker (free plan, 10ms CPU) can't score hundreds
- * of roles. This is ONE fetch, near-zero Worker CPU. On Node we rank locally.
- * See docs/adr-001-ranking-funnel.md.
- */
-async function rankViaEdge(userId: string): Promise<RankOutcome> {
-  const url = process.env.RANK_FN_URL;
-  const key = process.env.SUPABASE_ANON_KEY;
-  if (!url || !key) throw new Error("RANK_FN_URL / SUPABASE_ANON_KEY not configured");
-  const r = await fetch(url, {
-    method: "POST",
-    headers: { authorization: `Bearer ${key}`, "content-type": "application/json" },
-    body: JSON.stringify({ userId, trusted: TRUSTED_MODELS }),
-  });
-  if (!r.ok) throw new Error(`rank fn ${r.status}`);
-  const out = (await r.json()) as RankOutcome;
-  return { matches: out.matches ?? [], learning: out.learning ?? { active: false, events: 0, confidence: 0 }, userSkillKeys: out.userSkillKeys ?? [] };
-}
 
 export const runtime = "nodejs";
 export const maxDuration = 90;

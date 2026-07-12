@@ -19,7 +19,39 @@ import type { ScoringVector } from "@/lib/scoring/schema";
 
 export type { RankedJob, RankOutcome } from "./rank-core";
 
+/**
+ * On Cloudflare the ranking blend runs in the Supabase Edge Function `rank`
+ * (where the data lives) — the free Worker (10ms CPU) can't blend hundreds of
+ * pool rows in-process. This is ONE fetch, near-zero Worker CPU. On Node we
+ * rank locally (rankMatchesWithMeta). See docs/adr-001-ranking-funnel.md.
+ */
+export async function rankViaEdge(userId: string): Promise<RankOutcome> {
+  const url = process.env.RANK_FN_URL;
+  const key = process.env.SUPABASE_ANON_KEY;
+  if (!url || !key) throw new Error("RANK_FN_URL / SUPABASE_ANON_KEY not configured");
+  const r = await fetch(url, {
+    method: "POST",
+    headers: { authorization: `Bearer ${key}`, "content-type": "application/json" },
+    body: JSON.stringify({ userId, trusted: TRUSTED_MODELS }),
+  });
+  if (!r.ok) throw new Error(`rank fn ${r.status}`);
+  const out = (await r.json()) as RankOutcome;
+  return {
+    matches: out.matches ?? [],
+    learning: out.learning ?? { active: false, events: 0, confidence: 0 },
+    userSkillKeys: out.userSkillKeys ?? [],
+  };
+}
+
+/** Ranked matches, ROUTED by runtime: Edge Function on CF (cheap Worker), local
+ *  blend on Node. Every non-dashboard caller (mentor spectrum, apply-fit,
+ *  insight report) goes through here, so none of them blend the pool in the
+ *  Worker. The dashboard route calls rankViaEdge / rankMatchesWithMeta directly
+ *  because it also needs learning + skillRadar from the full outcome. */
 export async function rankMatches(userId: string): Promise<RankedJob[]> {
+  if (process.env.DEPLOY_TARGET === "cloudflare") {
+    return (await rankViaEdge(userId)).matches;
+  }
   return (await rankMatchesWithMeta(userId)).matches;
 }
 
