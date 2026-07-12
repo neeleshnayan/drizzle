@@ -5,6 +5,9 @@
  * about actual openings) AND surfaced as dive-able cards. Deterministic (no LLM
  * in the hot path); swappable for an LLM tool-call once the brain is Claude.
  */
+import { sql } from "drizzle-orm";
+import { withScopedDb } from "@/db";
+import { embedBge } from "@/lib/embeddings";
 import { rankMatches } from "./recommend";
 
 export type DirectionRole = { kind: string; title: string; company: string; why: string };
@@ -39,13 +42,57 @@ export function detectDirection(text: string): string | null {
 /** Pull the top real roles that fit the user in an EXPLICIT direction (no intent
  *  gate) — used by the Deepgram `fetch_recommendations` function call. */
 export async function recsForDirection(userId: string, direction: string): Promise<DirectionRole[]> {
-  const d = direction?.trim().toLowerCase();
+  const d = direction?.trim();
   if (!d) return [];
-  const dom = DOMAINS.find((x) => x.label === d) ?? DOMAINS.find((x) => x.kw.test(d));
+
+  // SEMANTIC pull: embed the direction with bge-m3 (same space as the pool's
+  // embedding_bge — OpenRouter on CF, local ollama in dev) and take the roles
+  // NEAREST to it in vector space. This is the "really aligned" recommendation —
+  // it finds roles that MEAN "marketing", not just ones with the word in them.
+  try {
+    const [vec] = await embedBge([d]);
+    if (vec?.length) {
+      const lit = `[${vec.join(",")}]`;
+      const res = await withScopedDb((db) =>
+        db.execute(sql`
+          SELECT title, company, domain, facts->>'summary' AS summary
+          FROM opportunities
+          WHERE embedding_bge IS NOT NULL AND visibility = 'global' AND title IS NOT NULL
+          ORDER BY embedding_bge <=> ${lit}::vector
+          LIMIT 16
+        `),
+      );
+      const rows = (Array.isArray(res) ? res : (res as { rows: unknown[] }).rows) as {
+        title: string; company: string | null; domain: string | null; summary: string | null;
+      }[];
+      // the pool has repeat postings — dedup by title+company, keep the nearest, cap at 4
+      const seen = new Set<string>();
+      const uniq = rows.filter((r) => {
+        const k = `${r.title}|${r.company ?? ""}`.toLowerCase();
+        if (seen.has(k)) return false;
+        seen.add(k);
+        return true;
+      }).slice(0, 4);
+      if (uniq.length) {
+        return uniq.map((r) => ({
+          kind: "A DIFFERENT PATH",
+          title: r.title,
+          company: r.company ?? "",
+          why: r.domain ? `${r.domain} — a strong ${d} fit` : `a strong ${d} fit`,
+        }));
+      }
+    }
+  } catch {
+    /* bge unavailable → fall through to the keyword approach below */
+  }
+
+  // fallback: keyword-filter the user's ranked matches (the previous behaviour)
+  const dl = d.toLowerCase();
+  const dom = DOMAINS.find((x) => x.label === dl) ?? DOMAINS.find((x) => x.kw.test(dl));
   const kw =
     dom?.kw ??
     new RegExp(
-      d.split(/\s+/).filter((w) => w.length > 2).map((w) => w.replace(/[^a-z0-9]/g, "")).filter(Boolean).join("|") || "\\b\\B",
+      dl.split(/\s+/).filter((w) => w.length > 2).map((w) => w.replace(/[^a-z0-9]/g, "")).filter(Boolean).join("|") || "\\b\\B",
       "i",
     );
   const ranked = await rankMatches(userId).catch(() => []);
