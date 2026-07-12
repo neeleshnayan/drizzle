@@ -1,39 +1,36 @@
 /**
- * Vision document reading — render a PDF to page images and have a vision model
- * transcribe each page to clean Markdown, preserving structure. This beats
- * glyph-position text extraction (parse.ts) on the layouts that break it:
- * multi-column and designed résumés, where dates/locations otherwise fly away
- * from their entries.
+ * Vision document reading — for the résumé layouts the glyph-position text pass
+ * (parse.ts) fights: multi-column and heavily-designed PDFs, where dates and
+ * locations otherwise fly away from their entries. A vision/OCR model reads the
+ * document and returns clean Markdown, which the existing VALIDATED resume
+ * extractor then structures (document → text, NOT document → schema — so the
+ * extraction contract isn't re-validated and the intermediate Markdown stays
+ * human-inspectable).
  *
- * Deliberately "document → text" (NOT "document → schema"): the vision model does
- * the one thing it's uniquely good at (layout-aware transcription), then the
- * existing, VALIDATED resume-extractor structures that text — so we don't
- * re-validate the extraction contract, and the intermediate Markdown is
- * human-inspectable. The shape mirrors Cloudflare Workers AI vision, so prod
- * swaps `transcribeImages` for the CF call with nothing downstream changing.
+ * TWO providers, no rendering on the cloud:
+ *   • ollama (local dev)  — render pages to PNGs, transcribe each (needs a GPU).
+ *   • openrouter (prod/CF) — send the PDF BYTES straight to OpenRouter's
+ *     file-parser (mistral-ocr) → gpt-4o-mini. No canvas/native render, so it
+ *     runs on a Cloudflare Worker, and it's off the rate-limited CF Workers-AI
+ *     neuron cap entirely.
  *
- * Opt-in via RESUME_PARSE=vision (default off → the text path is untouched).
+ * Opt-in via RESUME_PARSE=vision. parse.ts calls this only when the cheap text
+ * pass comes back thin, so a normal PDF never pays for OCR.
  */
 const BASE = process.env.OLLAMA_BASE_URL ?? "http://localhost:11434";
 const VISION_MODEL = process.env.RESUME_VISION_MODEL ?? "llama3.2-vision";
-// prod runs vision on Cloudflare Workers AI; local dev on Ollama. (llama3.2-vision
-// is dead on this local Ollama — mllama arch — so local uses gemma4; CF runs the
-// real llama-3.2-11b-vision. See the compute-split note.)
-// Same demarcation as the LLM: localhost → ollama; Cloudflare → OpenRouter
-// (gemma-4 multimodal, off the CF neuron cap). Explicit RESUME_VISION_PROVIDER wins.
+// localhost → ollama; Cloudflare → openrouter. Explicit RESUME_VISION_PROVIDER wins.
 const VISION_PROVIDER = (process.env.RESUME_VISION_PROVIDER ?? (process.env.DEPLOY_TARGET === "cloudflare" ? "openrouter" : "ollama")).toLowerCase();
-const CF_VISION_MODEL = process.env.CF_VISION_MODEL ?? "@cf/meta/llama-3.2-11b-vision-instruct";
 
 /** Whether the vision parse path is enabled. */
 export const VISION_PARSE_ON = (process.env.RESUME_PARSE ?? "").toLowerCase() === "vision";
 
 const TRANSCRIBE_PROMPT =
-  "You are a precise document transcriber. Transcribe this résumé/CV page to clean Markdown, EXACTLY as written — every name, company, job title, date, location, bullet point, and skill. Preserve the reading order and structure (section headings, entries, bullet lists). For multi-column layouts, keep each entry's dates and location WITH that entry, never in a separate block. Do NOT summarize, infer, reword, add, or omit anything. Output only the Markdown transcription, no commentary.";
+  "You are a precise document transcriber. Transcribe this résumé/CV to clean Markdown, EXACTLY as written — every name, company, job title, date, location, bullet point, and skill. Preserve the reading order and structure (section headings, entries, bullet lists). For multi-column layouts, keep each entry's dates and location WITH that entry, never in a separate block. Do NOT summarize, infer, reword, add, or omit anything. Output only the Markdown transcription, no commentary.";
 
-/** Render each PDF page to a base64 PNG. scale=2 keeps small text legible. */
+/** Render each PDF page to a base64 PNG. scale=2 keeps small text legible.
+ *  Node-only (native canvas); never reached on CF (openrouter path renders nothing). */
 async function renderPdfToImages(buffer: Buffer): Promise<string[]> {
-  // dynamic: pdf-to-img (native canvas) is Node-only. On CF it's aliased to empty
-  // (next.config), so this throws and parse.ts falls back to the text path.
   const { pdf } = await import("pdf-to-img");
   const doc = await pdf(buffer, { scale: 2 });
   const images: string[] = [];
@@ -43,38 +40,19 @@ async function renderPdfToImages(buffer: Buffer): Promise<string[]> {
   return images;
 }
 
-/** Cloudflare Workers AI vision transcription (OpenAI-compatible, base64 images). */
-async function transcribeViaCloudflare(imagesBase64: string[]): Promise<string> {
-  const account = process.env.CF_ACCOUNT_ID;
-  const key = process.env.CF_API_TOKEN;
-  if (!account || !key) throw new Error("CF_ACCOUNT_ID/CF_API_TOKEN not set for vision");
-  const res = await fetch(`https://api.cloudflare.com/client/v4/accounts/${account}/ai/v1/chat/completions`, {
-    method: "POST",
-    headers: { authorization: `Bearer ${key}`, "content-type": "application/json" },
-    body: JSON.stringify({
-      model: CF_VISION_MODEL,
-      max_tokens: 4096,
-      messages: [
-        {
-          role: "user",
-          content: [
-            ...imagesBase64.map((b) => ({ type: "image_url" as const, image_url: { url: `data:image/png;base64,${b}` } })),
-            { type: "text" as const, text: TRANSCRIBE_PROMPT },
-          ],
-        },
-      ],
-    }),
-  });
-  if (!res.ok) throw new Error(`CF vision ${res.status}: ${(await res.text()).slice(0, 200)}`);
-  const j = (await res.json()) as { choices?: { message?: { content?: string } }[] };
-  return (j.choices?.[0]?.message?.content ?? "").trim();
-}
-
-/** OpenRouter vision transcription (gemma-4 multimodal — off the CF neuron cap). */
-async function transcribeViaOpenRouter(imagesBase64: string[]): Promise<string> {
+/**
+ * Cloud path: hand the raw PDF to OpenRouter and let its file-parser OCR it, then
+ * gpt-4o-mini transcribes to clean Markdown per our prompt. No rendering — the
+ * bytes go up as a `file` content part, so this works on a Worker. Engine
+ * defaults to mistral-ocr (real OCR, ~$1-2/1k pages — handles designed/scanned
+ * layouts); set OPENROUTER_PDF_ENGINE=pdf-text for the free text-layer engine.
+ */
+async function transcribePdfViaOpenRouter(buffer: Buffer): Promise<string> {
   const key = process.env.OPENROUTER_API_KEY;
   if (!key) throw new Error("OPENROUTER_API_KEY not set for vision");
-  const model = process.env.OPENROUTER_VISION_MODEL ?? process.env.OPENROUTER_MODEL ?? "google/gemma-4-26b-a4b-it:free";
+  const model = process.env.OPENROUTER_VISION_MODEL ?? "openai/gpt-4o-mini";
+  const engine = process.env.OPENROUTER_PDF_ENGINE ?? "mistral-ocr";
+  const dataUrl = `data:application/pdf;base64,${buffer.toString("base64")}`;
   const res = await fetch("https://openrouter.ai/api/v1/chat/completions", {
     method: "POST",
     headers: {
@@ -89,11 +67,12 @@ async function transcribeViaOpenRouter(imagesBase64: string[]): Promise<string> 
         {
           role: "user",
           content: [
-            ...imagesBase64.map((b) => ({ type: "image_url" as const, image_url: { url: `data:image/png;base64,${b}` } })),
-            { type: "text" as const, text: TRANSCRIBE_PROMPT },
+            { type: "text", text: TRANSCRIBE_PROMPT },
+            { type: "file", file: { filename: "resume.pdf", file_data: dataUrl } },
           ],
         },
       ],
+      plugins: [{ id: "file-parser", pdf: { engine } }],
     }),
   });
   if (!res.ok) throw new Error(`OpenRouter vision ${res.status}: ${(await res.text()).slice(0, 200)}`);
@@ -101,12 +80,8 @@ async function transcribeViaOpenRouter(imagesBase64: string[]): Promise<string> 
   return (j.choices?.[0]?.message?.content ?? "").trim();
 }
 
-/** One vision call → the page's Markdown. Per-page (not multi-image) so it stays
- *  robust across vision models that handle a single image best. Prod → OpenRouter,
- *  local → Ollama (CF Workers AI still available via RESUME_VISION_PROVIDER). */
-async function transcribeImages(imagesBase64: string[]): Promise<string> {
-  if (VISION_PROVIDER === "openrouter") return transcribeViaOpenRouter(imagesBase64);
-  if (VISION_PROVIDER === "cloudflare") return transcribeViaCloudflare(imagesBase64);
+/** Local path: one Ollama vision call per rendered page → the page's Markdown. */
+async function transcribeViaOllama(imagesBase64: string[]): Promise<string> {
   const res = await fetch(`${BASE}/api/chat`, {
     method: "POST",
     headers: { "content-type": "application/json" },
@@ -114,7 +89,7 @@ async function transcribeImages(imagesBase64: string[]): Promise<string> {
       model: VISION_MODEL,
       stream: false,
       keep_alive: "1m", // stay warm across a multi-page résumé, then auto-unload
-      think: false, // transcription, not reasoning — gemma4/qwen default-think would pollute output + add latency
+      think: false, // transcription, not reasoning — default-think would pollute output + add latency
       options: { temperature: 0, num_ctx: 8192 },
       messages: [{ role: "user", content: TRANSCRIBE_PROMPT, images: imagesBase64 }],
     }),
@@ -124,12 +99,14 @@ async function transcribeImages(imagesBase64: string[]): Promise<string> {
   return (j.message?.content ?? "").trim();
 }
 
-/** Render a résumé PDF and transcribe it page-by-page to one Markdown string. */
+/** Read a résumé PDF to one Markdown string. Cloud → PDF bytes to OpenRouter (no
+ *  render); local → render pages and transcribe each with Ollama. */
 export async function visionParsePdf(buffer: Buffer): Promise<string> {
+  if (VISION_PROVIDER === "openrouter") return transcribePdfViaOpenRouter(buffer);
   const images = await renderPdfToImages(buffer);
   const pages: string[] = [];
   for (const img of images) {
-    pages.push(await transcribeImages([img]));
+    pages.push(await transcribeViaOllama([img]));
   }
   return pages.join("\n\n").replace(/\n{3,}/g, "\n\n").trim();
 }

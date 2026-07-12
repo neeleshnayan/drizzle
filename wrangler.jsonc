@@ -15,7 +15,7 @@
     "CF_MODEL": "@cf/meta/llama-3.1-8b-instruct-fast",
     "CF_LIVE_MODEL": "@cf/meta/llama-3.1-8b-instruct-fast",
     "RESUME_VISION_PROVIDER": "openrouter",
-    "CF_VISION_MODEL": "@cf/meta/llama-3.2-11b-vision-instruct",
+    "RESUME_PARSE": "vision",
     "RANK_FN_URL": "https://qlrjkiqznvvrnxbvbstc.supabase.co/functions/v1/rank",
     "SUPABASE_ANON_KEY": "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6InFscmpraXF6bnZ2cm54YnZic3RjIiwicm9sZSI6ImFub24iLCJpYXQiOjE3ODMxMDUzMzQsImV4cCI6MjA5ODY4MTMzNH0.H8VuLwo-xhqPJezH96V4MV4ZTKqQgDrXIIQDg_QYk6A",
     "DEEPGRAM_ALLOW_RAW": "1",

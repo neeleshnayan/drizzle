@@ -78,18 +78,20 @@ export async function parseResumeFile(
   const name = filename.toLowerCase();
 
   if (mime === "application/pdf" || name.endsWith(".pdf")) {
-    // vision path (RESUME_PARSE=vision): a vision model reads the rendered pages,
-    // which handles multi-column/designed layouts the glyph-position pass fights.
-    // Falls through to the text path if it's off, errors, or yields nothing.
-    if (VISION_PARSE_ON) {
+    // TEXT FIRST: the glyph-position pass is free + instant and handles most
+    // résumés well. Only when it comes back THIN (a designed/multi-column or
+    // image-only PDF where the text layer is sparse) do we pay for vision/OCR —
+    // so a normal upload never hits OpenRouter. RESUME_PARSE=vision arms it.
+    const layout = await parsePdfLayout(buffer);
+    const thin = layout.replace(/\s+/g, "").length < 300;
+    if (VISION_PARSE_ON && thin) {
       try {
         const md = await visionParsePdf(buffer);
         if (md.length > 50) return md;
       } catch (err) {
-        console.warn("[parse] vision parse failed — falling back to text:", err instanceof Error ? err.message : err);
+        console.warn("[parse] vision parse failed — keeping text:", err instanceof Error ? err.message : err);
       }
     }
-    const layout = await parsePdfLayout(buffer);
     if (layout.length > 50) return layout;
     // fallback: naive extraction if position reconstruction produced nothing
     const pdf = await getDocumentProxy(new Uint8Array(buffer));
