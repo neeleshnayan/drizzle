@@ -290,7 +290,7 @@ export function rankFromInputs(inputs: RpcInputs, base: ScoringVector): RankOutc
     .map((r) => {
       const v = (r.vector ?? {}) as OpportunityVector;
       const f = (r.facts ?? {}) as Partial<OpportunityFacts>;
-      const gate = hardGate({ facts: f }, quals);
+      const gate = hardGate({ facts: f, title: r.title }, quals);
       if (!gate.pass) return null;
       const m = scoreMatch(vec, v);
       const c = compRefine(pref, r.compMin, r.compMax, f.comp_currency ?? inferCurrency(r.location));

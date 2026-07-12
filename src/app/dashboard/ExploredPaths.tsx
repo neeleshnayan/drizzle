@@ -68,6 +68,20 @@ export default function ExploredPaths({ userId }: { userId: string }) {
     }
   }
 
+  // Undo a commit (committed by mistake / changed their mind). Optimistic —
+  // clears committed_at locally, then persists.
+  async function uncommit(id: string) {
+    setCommitting(id);
+    setPaths((ps) => ps?.map((p) => (p.id === id ? { ...p, committedAt: null } : p)) ?? ps);
+    try {
+      await fetch("/api/mentor/explored", { method: "PATCH", headers: { "content-type": "application/json" }, body: JSON.stringify({ id, uncommit: true }) });
+    } catch {
+      /* leave it; the optimistic flip stands until reload */
+    } finally {
+      setCommitting(null);
+    }
+  }
+
   if (!paths || paths.length === 0) return null; // invisible for first-timers
 
   return (
@@ -97,7 +111,18 @@ export default function ExploredPaths({ userId }: { userId: string }) {
                 explored {p.visitCount}×{p.visitCount > 1 ? "" : ""} · {ago(p.lastVisitedAt)}
               </div>
               {committed ? (
-                <div className="explored-committed">✓ Committed — we&apos;ll line up your intro + apply kit</div>
+                <div className="explored-committed">
+                  ✓ Committed — we&apos;ll line up your intro + apply kit
+                  <button
+                    type="button"
+                    className="explored-undo"
+                    onClick={() => uncommit(p.id)}
+                    disabled={committing === p.id}
+                    style={{ marginLeft: 8, background: "none", border: "none", color: "var(--muted)", textDecoration: "underline", cursor: "pointer", font: "inherit", fontSize: 12.5, padding: 0 }}
+                  >
+                    {committing === p.id ? "…" : "Undo"}
+                  </button>
+                </div>
               ) : (
                 <button className="explored-commit" onClick={() => commit(p.id)} disabled={committing === p.id}>
                   {committing === p.id ? "…" : "Commit to this path →"}

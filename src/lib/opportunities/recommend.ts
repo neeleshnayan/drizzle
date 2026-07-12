@@ -50,6 +50,15 @@ export async function rankMatchesWithMeta(userId: string, opts?: { wait?: boolea
   );
   const inputs = rows<{ inputs: RpcInputs }>(rpcRes)[0]?.inputs;
   if (!inputs) return empty;
+
+  // No résumé yet → recommendations would be noise, AND computing a scoring
+  // vector below burns a (paid) LLM call for a profile with nothing to score.
+  // Show nothing until they've uploaded something with substance. A mentor-only
+  // user (insights but no résumé) still has no evidence to rank on, so gate on
+  // résumé content specifically.
+  const hasResume = (inputs.experiences?.length ?? 0) > 0 || (inputs.skills?.length ?? 0) > 0;
+  if (!hasResume) return empty;
+
   const me = inputs.profile;
 
   // scoring vector: fresh cache → serve; missing (brand-new user) → compute inline;

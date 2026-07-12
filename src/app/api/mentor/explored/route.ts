@@ -5,7 +5,7 @@
 import { NextResponse } from "next/server";
 import { z } from "zod";
 import { resolveUserId } from "@/lib/auth/user";
-import { listExploredPaths, recordExploredPath, markCommitted } from "@/lib/explored/persist";
+import { listExploredPaths, recordExploredPath, markCommitted, markUncommitted } from "@/lib/explored/persist";
 import { mintDirectionTag } from "@/lib/explored/direction-tag";
 import { fillTargetTheme } from "@/lib/track/persist";
 
@@ -50,13 +50,17 @@ export async function POST(req: Request) {
   }
 }
 
-// PATCH — commit to a path (the paid step-up). Marks committed_at.
+// PATCH — commit to a path (the paid step-up), or undo a commit (`uncommit`).
 export async function PATCH(req: Request) {
   try {
-    const { id } = (await req.json()) as { id?: string };
+    const { id, uncommit } = (await req.json()) as { id?: string; uncommit?: boolean };
     if (!id) return NextResponse.json({ error: "Missing id" }, { status: 400 });
     const userId = await resolveUserId(null);
     if (!userId) return NextResponse.json({ error: "Not signed in" }, { status: 401 });
+    if (uncommit) {
+      const ok = await markUncommitted(userId, id);
+      return NextResponse.json({ ok });
+    }
     const committed = await markCommitted(userId, id);
     // Commit = "this is my direction now" → make it the target role so the
     // recommendations re-rank toward it (trajectory + the "you set this" reason).

@@ -144,8 +144,34 @@ const ALIASES: Record<string, Credential> = {
 
 // ---- the gate ----
 
-export function hardGate(role: { facts: Partial<OpportunityFacts> | null }, cand: CandidateQuals): GateResult {
+// Seniority reads OFF the title (extraction rarely floors it): an internship or
+// trainee posting is written for a student, not someone mid-career; an explicit
+// junior/entry/new-grad posting is written well below a senior. Kept tight to
+// avoid false gates — "Associate" alone is too ambiguous (Associate PM = entry,
+// Associate Partner = senior), so it's excluded.
+const INTERNSHIP = /\b(intern|internship|trainee|apprentice(ship)?|co-?op|working student|praktikum|summer analyst)\b/i;
+const ENTRY_LEVEL = /\b(entry[ -]?level|junior|jr\.?|new grad(uate)?|grad(uate)? (scheme|programme|program|analyst|trainee)|early[ -]?career)\b/i;
+
+export function hardGate(
+  role: { facts: Partial<OpportunityFacts> | null; title?: string | null },
+  cand: CandidateQuals,
+): GateResult {
   const f = role.facts ?? {};
+
+  // Downward seniority: a role can be too JUNIOR, not just too senior. An
+  // internship is a hard miss for anyone with real experience; an entry-level
+  // posting for a clearly-senior candidate is a steep demote (they *might*
+  // downshift, but it must never read as a strong match).
+  const title = role.title ?? f.title ?? "";
+  const yrs = cand.yearsExperience;
+  if (yrs !== null) {
+    if (INTERNSHIP.test(title) && yrs >= 3) {
+      return { pass: false, reason: `an internship — you're at ${yrs} yrs` };
+    }
+    if (ENTRY_LEVEL.test(title) && yrs >= 8) {
+      return { pass: true, marginal: { penalty: 0.6, gap: `An entry-level role — well below your ${yrs} yrs` } };
+    }
+  }
 
   const requiredCreds = ((f.required_credentials as string[] | undefined) ?? [])
     .map((c) => c.toLowerCase().trim())

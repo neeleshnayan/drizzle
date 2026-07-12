@@ -75,6 +75,19 @@ export async function markCommitted(userId: string, id: string): Promise<{ label
   return { label: tag || row.label };
 }
 
+/** Undo a commit — clears committed_at so the user can re-choose (they committed
+ *  by mistake, or changed their mind). Scoped to the user's own paths. */
+export async function markUncommitted(userId: string, id: string): Promise<boolean> {
+  const [p] = await db.select({ id: profiles.id }).from(profiles).where(eq(profiles.userId, userId)).limit(1);
+  if (!p) return false;
+  const [row] = await db
+    .update(exploredPaths)
+    .set({ committedAt: null })
+    .where(and(eq(exploredPaths.id, id), eq(exploredPaths.profileId, p.id)))
+    .returning({ id: exploredPaths.id });
+  return !!row;
+}
+
 /** All branches for a user, most-recently-visited first. Read-only (no profile create). */
 export async function listExploredPaths(userId: string) {
   const [p] = await db.select({ id: profiles.id }).from(profiles).where(eq(profiles.userId, userId)).limit(1);
