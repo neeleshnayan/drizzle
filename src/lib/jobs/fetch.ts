@@ -33,6 +33,8 @@ const DEFAULT_TITLE_FILTER = [
   "writer|content|marketing|growth|editor|communications",
   "sales|account|success|support|partnership|community",
   "finance|accountant|people|talent|recruit",
+  // CA / finance-track / professional-services (Indian market + MBA pipelines)
+  "chartered accountant|\\bacca\\b|\\bcpa\\b|\\bcfa\\b|audit|taxation|actuar|investment bank|equity research|wealth|treasury|consultant|consulting",
 ].join("|");
 // exclusions now empty by default — every vertical is someone's career.
 // Set JOBS_TITLE_EXCLUDE to re-introduce noise filtering per deployment.

@@ -8,6 +8,7 @@
 import { eq } from "drizzle-orm";
 import { db } from "@/db";
 import { agentRuns } from "@/db/schema";
+import { assertUnderCap } from "@/lib/usage/cap";
 import type { Agent, AgentContext, AgentResult } from "./types";
 
 export async function runAgent<I, O>(
@@ -17,6 +18,14 @@ export async function runAgent<I, O>(
 ): Promise<AgentResult<O>> {
   const started = Date.now();
   let runId: string | undefined;
+
+  // Free-tier spend cap — block real users who've burned their OpenRouter budget
+  // BEFORE any work or logging. System/worker runs (job vectorization etc.) carry
+  // no real user UUID and are operator cost, so they're never capped. Throws
+  // SpendCapError, which the calling route surfaces to the user.
+  if (ctx.userId && /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(ctx.userId)) {
+    await assertUnderCap(ctx.userId);
+  }
 
   // Log every run, not just ones tied to a profile — worker/system calls
   // (job vectorization, etc.) have no profileId but still cost real tokens,

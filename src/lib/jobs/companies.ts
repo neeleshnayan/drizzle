@@ -51,6 +51,18 @@ export const COMPANIES: { source: Source; slug: string }[] = [
   { source: "greenhouse", slug: "postman" },
   { source: "lever", slug: "meesho" },
   { source: "greenhouse", slug: "sigmoid" },
+  // more India-market boards — probe-tolerant: a bad slug just skips (the fetch
+  // loop catches per-board 404s). Run a fetch and prune whatever doesn't resolve.
+  { source: "lever", slug: "razorpay" },
+  { source: "lever", slug: "cred" },
+  { source: "greenhouse", slug: "browserstack" },
+  { source: "greenhouse", slug: "hasura" },
+  { source: "greenhouse", slug: "chargebee" },
+  { source: "greenhouse", slug: "innovaccer" },
+  { source: "greenhouse", slug: "mindtickle" },
+  { source: "greenhouse", slug: "whatfix" },
+  { source: "lever", slug: "clevertap" },
+  { source: "lever", slug: "juspay" },
   // london / uk
   { source: "greenhouse", slug: "monzo" },
   { source: "greenhouse", slug: "gocardless" },
