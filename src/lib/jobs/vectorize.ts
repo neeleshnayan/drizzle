@@ -19,7 +19,6 @@ import { getProvider } from "@/llm";
 import { VECTORIZE_PROMPT, VECTORIZE_PROMPT_VERSION, vectorizeJsonSchema } from "@/agents/opportunity-vectorizer";
 import { opportunityExtraction, type OpportunityExtraction, type OpportunityFacts } from "@/lib/opportunities/schema";
 import { sanitize } from "@/agents/jd-keywords";
-import { embed, roleEmbedText } from "@/lib/embeddings";
 
 // granite4.1:8b was DEMOTED after a vector-flatness audit (2026-07-10): its
 // facts were fine but 93% of its 0-1 axis scores landed in [0.55,0.65], 90% of
@@ -174,21 +173,15 @@ export function applyRowAuthority(out: OpportunityExtraction, row: RowMeta): voi
  *  prompt bump re-queue exactly the stale rows and nothing else. */
 export async function writeVectorization(id: string, out: OpportunityExtraction, model: string | null, row: RowMeta): Promise<void> {
   const facts = { ...out.facts, prompt_v: VECTORIZE_PROMPT_VERSION };
-  // semantic trajectory embedding. INLINE by default (single-row API path), but
-  // batch sweeps set EMBED_INLINE=0: on a 23GB card gemma3:27b already fills VRAM,
-  // so calling nomic between rows EVICTS gemma and forces a ~30s reload every row
-  // (the VRAM sawtooth). Batch runs skip it here and fill embeddings in one
-  // nomic-only pass afterwards, keeping gemma resident throughout extraction.
-  let embedding: number[] | null = null;
-  if (process.env.EMBED_INLINE !== "0") {
-    try { embedding = (await embed([roleEmbedText(out.facts, row.title)]))[0] ?? null; } catch { /* fill later via embed backfill */ }
-  }
+  // Trajectory embedding is bge-m3 (embedding_bge), written in ONE local pass
+  // after extraction (see fetch.ts) or by tools/bge-backfill — not here. The old
+  // inline nomic embed (legacy `embedding` jsonb) is retired: ranking never read
+  // it, and embedding between rows evicted the resident extractor (VRAM sawtooth).
   await db
     .update(opportunities)
     .set({
       vector: out.vector,
       facts,
-      ...(embedding ? { embedding } : {}),
       remote: out.facts.remote ?? undefined,
       // comp_* are integer columns; models occasionally emit a decimal
       // (e.g. gemma4 → "63003.2"), which Postgres rejects. Round to int.

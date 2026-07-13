@@ -8,6 +8,7 @@
  */
 import { NextRequest, NextResponse } from "next/server";
 import { resolveUserId } from "@/lib/auth/user";
+import { getSavedScoring, computeAndSaveScoring, recomputeScoringInBackground } from "@/lib/scoring/persist";
 import { rankMatchesWithMeta, rankViaEdge, pickSpectrum, type RankedJob } from "@/lib/opportunities/recommend";
 import { canonSkillKey } from "@/lib/skills/canon";
 import { getLearnedSkillCasing, displaySkillSmart } from "@/lib/skills/learned";
@@ -50,6 +51,20 @@ export async function GET(req: NextRequest) {
   const userId = await resolveUserId(req.nextUrl.searchParams.get("u"));
   if (!userId) return NextResponse.json({ error: "Not signed in" }, { status: 401 });
   const wait = req.nextUrl.searchParams.get("refresh") === "1";
+  
+  // Universal cache validation: check if the scoring vector is missing or stale.
+  // This guarantees the Edge ranker never receives a stale/null vector if it doesn't have to.
+  const saved = await getSavedScoring(userId);
+  if (!saved.scoring || (saved.stale && wait)) {
+    try {
+      await computeAndSaveScoring(userId);
+    } catch (err) {
+      console.warn("[/api/matches] inline scoring failed", err);
+    }
+  } else if (saved.stale) {
+    recomputeScoringInBackground(userId);
+  }
+
   const onCF = process.env.DEPLOY_TARGET === "cloudflare";
   // On CF the blend runs in the Supabase Edge Function (rankViaEdge, one fetch);
   // on Node it ranks locally. Both return the same RankOutcome shape.

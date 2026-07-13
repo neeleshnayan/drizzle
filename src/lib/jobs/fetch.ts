@@ -13,7 +13,7 @@ import { and, asc, eq, inArray, isNull, ne, or, sql } from "drizzle-orm";
 import { db } from "@/db";
 import { opportunities } from "@/db/schema";
 import { releaseLiveModel } from "@/llm/ollama";
-import { embed, roleEmbedText } from "@/lib/embeddings";
+import { embedBge, roleEmbedText } from "@/lib/embeddings";
 import { COMPANIES } from "./companies";
 import { fetchBoard } from "./ats";
 import { FAST_MODEL, STRONG_MODEL, TRUSTED_MODELS, extractRole, escalationReason, applyRowAuthority, writeVectorization, cleanSkills, unloadModel } from "./vectorize";
@@ -339,31 +339,39 @@ export async function runInference(opts?: {
     }
   }
 
-  // ── deferred embed pass: ONE extractor→nomic swap, then nomic embeds all rows
-  // in this run. Writes BOTH embedding (legacy jsonb) and embedding_vec (pgvector,
-  // used by the ranking RPC) so semantic trajectory is live for fresh rows. ──
+  // ── deferred embed pass: after extraction, embed every fresh row with bge-m3
+  // in ONE pass (no per-row model swap) and write embedding_bge — the vector the
+  // ranking RPC actually reads. Runs on the LOCAL ollama (this box's GPU), free;
+  // OpenRouter is never touched here. (nomic/embedding_vec is retired — trajectory
+  // is 100% bge now, so a freshly-crunched job is immediately rankable.) ──
   if (embedIds.length) {
     try {
-      await unloadModel(STRONG_MODEL); // free the extractor's VRAM before nomic
-      log(`Embedding ${embedIds.length} role(s) — nomic, one pass (no per-row swap)…`);
+      await unloadModel(STRONG_MODEL); // free the extractor's VRAM before bge
+      log(`Embedding ${embedIds.length} role(s) — bge-m3, one local pass (no per-row swap)…`);
       const toEmbed = await db
-        .select({ id: opportunities.id, title: opportunities.title, facts: opportunities.facts })
+        .select({ id: opportunities.id, title: opportunities.title, domain: opportunities.domain, facts: opportunities.facts })
         .from(opportunities)
         .where(inArray(opportunities.id, embedIds));
       let embedded = 0;
       for (let i = 0; i < toEmbed.length; i += 32) {
         const b = toEmbed.slice(i, i + 32);
-        const vecs = await embed(b.map((r) => roleEmbedText((r.facts ?? {}) as Parameters<typeof roleEmbedText>[0], r.title)));
+        // same text construction as tools/bge-backfill (bge is symmetric — strip nomic's prefix)
+        const vecs = await embedBge(
+          b.map((r) => {
+            const f = (r.facts ?? {}) as { summary?: string; must_have_skills?: string[]; domain?: string };
+            return roleEmbedText({ title: r.title ?? undefined, summary: f.summary, must_have_skills: f.must_have_skills, domain: r.domain ?? f.domain }, r.title).replace(/^search_document:\s*/, "");
+          }),
+        );
         await Promise.all(
           b.map((r, j) =>
             vecs[j]?.length
-              ? db.execute(sql`UPDATE opportunities SET embedding = ${JSON.stringify(vecs[j])}::jsonb, embedding_vec = ${`[${vecs[j].join(",")}]`}::vector WHERE id = ${r.id}`)
+              ? db.execute(sql`UPDATE opportunities SET embedding_bge = ${`[${vecs[j].join(",")}]`}::vector WHERE id = ${r.id}`)
               : Promise.resolve(),
           ),
         );
         embedded += b.length;
       }
-      log(`Embedded ${embedded}.`);
+      log(`Embedded ${embedded} (bge, local).`);
     } catch (e) {
       log(`Embed pass failed: ${(e as Error).message} — rankings use lexical trajectory until re-embedded.`);
     }

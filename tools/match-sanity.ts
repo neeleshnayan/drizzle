@@ -100,23 +100,30 @@ const CHECKS: Check[] = [
 
 async function main() {
   const { db } = await import("../src/db");
-  const { opportunities } = await import("../src/db/schema");
-  const { and, eq, ne, isNotNull } = await import("drizzle-orm");
+  const { sql } = await import("drizzle-orm");
   const { scoreMatch } = await import("../src/lib/opportunities/match");
   const { blendCore, relevanceDamp } = await import("../src/lib/opportunities/blend");
   const { STRONG_MODEL } = await import("../src/lib/jobs/vectorize");
-  const { embed, cosine, trajectoryFromCosine } = await import("../src/lib/embeddings");
+  const { embedBge, cosine } = await import("../src/lib/embeddings");
+  // production trajectory curve (bge-calibrated) — the SAME one ranking uses
+  const { trajectoryFromCosine } = await import("../src/lib/opportunities/rank-core");
   const { profileByKey } = await import("./profiles");
 
   const profiles = CHECKS.map((c) => profileByKey(c.key));
 
-  const rows = await db
-    .select({ title: opportunities.title, company: opportunities.company, vector: opportunities.vector, facts: opportunities.facts, embedding: opportunities.embedding })
-    .from(opportunities)
-    .where(and(eq(opportunities.vectorizeModel, STRONG_MODEL), isNotNull(opportunities.vector), ne(opportunities.source, "sample")));
+  // bge lives in a raw column (not the drizzle schema), so fetch it as text and
+  // parse — the pgvector text form ('[f,f,…]') is already valid JSON.
+  const rawRows = await db.execute(sql`
+    SELECT title, company, vector, facts, embedding_bge::text AS emb
+    FROM opportunities
+    WHERE vectorize_model = ${STRONG_MODEL} AND vector IS NOT NULL AND source <> 'sample'`);
+  const rows = ((Array.isArray(rawRows) ? rawRows : (rawRows as { rows: unknown[] }).rows) as {
+    title: string | null; company: string | null; vector: unknown; facts: unknown; emb: string | null;
+  }[]).map((r) => ({ title: r.title, company: r.company, vector: r.vector, facts: r.facts, embedding: r.emb ? (JSON.parse(r.emb) as number[]) : null }));
 
-  // embed the directions once — the SAME embedding trajectory production uses
-  const dirVecs = await embed(profiles.map((p) => `search_query: ${p.direction}`));
+  // embed the directions once with bge — the SAME trajectory production uses
+  // (bge symmetric → plain text, no "search_query:" prefix)
+  const dirVecs = await embedBge(profiles.map((p) => p.direction));
 
   console.log(`Scoring against ${rows.length} ${STRONG_MODEL}-vectorized roles\n${"=".repeat(72)}`);
   if (rows.length < 15) console.log("⚠ small pool — directional only; re-run as the backfill fills in\n");

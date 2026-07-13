@@ -11,7 +11,6 @@
  */
 import { sql } from "drizzle-orm";
 import { withScopedDb } from "@/db";
-import { computeAndSaveScoring, recomputeScoringInBackground } from "@/lib/scoring/persist";
 import { TRUSTED_MODELS } from "@/lib/jobs/vectorize";
 import { embedBge } from "@/lib/embeddings";
 import { rankFromInputs, type RankedJob, type RankOutcome, type RpcInputs } from "./rank-core";
@@ -96,15 +95,9 @@ export async function rankMatchesWithMeta(userId: string, opts?: { wait?: boolea
   // scoring vector: fresh cache → serve; missing (brand-new user) → compute inline;
   // stale → serve cached + refresh in the background (Node only — a floating
   // promise wedges a Worker isolate); explicit Refresh (wait) recomputes inline.
-  let base = (me?.scoring ?? null) as unknown as ScoringVector | null;
-  const stale = !!me?.scoringStale;
-  if (!base) {
-    try { base = (await computeAndSaveScoring(userId)) as unknown as ScoringVector; } catch { base = null; }
-  } else if (stale && opts?.wait) {
-    try { base = (await computeAndSaveScoring(userId)) as unknown as ScoringVector; } catch { /* keep cached */ }
-  } else if (stale && process.env.DEPLOY_TARGET !== "cloudflare") {
-    recomputeScoringInBackground(userId);
-  }
+  // NOTE: Cache validation (null/stale checks) is now universally handled in 
+  // /api/opportunities/matches/route.ts before this function is called.
+  const base = (me?.scoring ?? null) as unknown as ScoringVector | null;
   if (!base) return empty;
 
   // Embed the user's direction live with bge-m3 and fill each pool row's trajDist
