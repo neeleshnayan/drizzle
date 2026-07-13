@@ -23,6 +23,13 @@ export async function computeAndSaveScoring(userId: string): Promise<Record<stri
   const promise = (async () => {
     const [full, map] = await Promise.all([getFullProfile(userId), getMentorMap(userId)]);
     if (!full) throw new Error("No profile for this user");
+    // Nothing to score yet (no résumé uploaded) → return WITHOUT the big-model
+    // call. The matches route computes inline on a null vector, so this keeps
+    // that free for résumé-less users (mirrors rankMatchesWithMeta's hasResume
+    // gate). Doesn't persist, so a real résumé later still triggers a compute.
+    const hasResume =
+      full.experiences.length || full.skills.length || full.education.length || full.projects.length || full.certifications.length;
+    if (!hasResume) return {} as Record<string, unknown>;
     const profileText = buildProfileText(full, map.insights);
     const { output } = await runAgent(profileScorer, { profileText }, { userId });
     const scoring = output as Record<string, unknown>;
@@ -65,16 +72,8 @@ export async function invalidateScoring(userId: string): Promise<void> {
   }
 }
 
-// The scoring recompute is a big-model call. Ranking READS must never block on
-// it — they serve the cached (possibly stale) vector and kick the recompute off
-// here so the NEXT read is fresh. Deduped: the dashboard/editor/mentor screens
-// all poll matches, so without a guard a burst of polls would stack up N
-// concurrent LLM passes and thrash the one GPU. In-process Map is enough locally
-// (single Node); on a multi-instance deploy the scoring_stale flag still
-// converges once any instance's recompute wins.
-export function recomputeScoringInBackground(userId: string): void {
-  if (computing.has(userId)) return;
-  void computeAndSaveScoring(userId).catch(() => {
-    /* stale flag stays set → a later read retries; never surfaced to the user */
-  });
-}
+// The scoring recompute (big-model call) is now driven from the matches route,
+// which schedules the background refresh via Next after() (= waitUntil on CF; a
+// raw floating promise would wedge a Worker isolate). computeAndSaveScoring's
+// in-process `computing` map still coalesces concurrent calls so a burst of
+// dashboard polls can't stack up N LLM passes against the one GPU.
