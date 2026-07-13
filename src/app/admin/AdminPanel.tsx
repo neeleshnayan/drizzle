@@ -20,6 +20,7 @@ type Metrics = {
     last_at: string;
   }[];
   recentRuns: { agent: string; status: string; model: string | null; duration_ms: number | null; error: string | null; created_at: string }[];
+  latestUsers?: { who: string; email: string | null; created_at: string; linkedin: boolean; exp: number; calls: number; applied: number }[];
   mentorDiary?: {
     lane: { holder: { userId: string; forSec: number } | null; waitingCount: number };
     insights: { dimension: string; content: string; stance: string | null; confidence: number | null; who: string; created_at: string }[];
@@ -393,6 +394,33 @@ export default function AdminPanel() {
           <p className="admin-note">
             &ldquo;Active&rdquo; = any recorded action (upload, edit, call). Real session tracking lands with the first outside users.
           </p>
+
+          {m.latestUsers && m.latestUsers.length > 0 && (
+            <section className="admin-section">
+              <h2>Latest signups <span style={{ fontWeight: 400, color: "var(--muted)", fontSize: 13 }}>· newest first, scroll for more</span></h2>
+              <div style={{ maxHeight: 360, overflowY: "auto", border: "1px solid rgba(230,210,170,0.14)", borderRadius: 10 }}>
+                {m.latestUsers.map((u, i) => (
+                  <div
+                    key={i}
+                    style={{ display: "flex", alignItems: "center", gap: 12, padding: "9px 14px", fontSize: 13.5, borderBottom: i < m.latestUsers!.length - 1 ? "1px solid rgba(230,210,170,0.07)" : "none" }}
+                  >
+                    <div style={{ width: 22, color: "var(--muted)", fontSize: 12, flexShrink: 0 }}>{i + 1}</div>
+                    <div style={{ flex: 1, minWidth: 0 }}>
+                      <div style={{ fontWeight: 600, whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis" }}>{u.who}</div>
+                      {u.email && u.email !== u.who && <div style={{ color: "var(--muted)", fontSize: 12, whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis" }}>{u.email}</div>}
+                    </div>
+                    <div style={{ display: "flex", gap: 6, flexShrink: 0, fontSize: 11.5 }}>
+                      {u.linkedin && <span title="Signed in with LinkedIn" style={{ padding: "2px 7px", borderRadius: 6, background: "rgba(216,142,106,0.14)", color: "#E0A579" }}>in</span>}
+                      {u.exp > 0 && <span title="Résumé uploaded" style={{ padding: "2px 7px", borderRadius: 6, background: "rgba(230,210,170,0.10)", color: "var(--muted)" }}>📄</span>}
+                      {u.calls > 0 && <span title={`${u.calls} mentor call(s)`} style={{ padding: "2px 7px", borderRadius: 6, background: "rgba(230,210,170,0.10)", color: "var(--muted)" }}>🎙 {u.calls}</span>}
+                      {u.applied > 0 && <span title={`${u.applied} application(s)`} style={{ padding: "2px 7px", borderRadius: 6, background: "rgba(230,210,170,0.10)", color: "var(--muted)" }}>✉ {u.applied}</span>}
+                    </div>
+                    <div style={{ color: "var(--muted)", fontSize: 12, flexShrink: 0, width: 96, textAlign: "right" }}>{new Date(u.created_at).toLocaleDateString()}</div>
+                  </div>
+                ))}
+              </div>
+            </section>
+          )}
 
           <section className="admin-section">
             <h2>Mentor conversations by user</h2>

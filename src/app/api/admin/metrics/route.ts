@@ -25,7 +25,7 @@ export async function GET() {
     for (const q of qs) out.push(await q());
     return out;
   };
-  const [calls, callsByUser, edits, apps, agents, recentRuns, activity, byModel, spendByUser, mentorInsights, pastCalls] = await run<unknown>([
+  const [calls, callsByUser, edits, apps, agents, recentRuns, activity, byModel, spendByUser, mentorInsights, pastCalls, latestUsers] = await run<unknown>([
     () => db.execute(sql`select count(*)::int as n from sources where kind = 'mentor_call'`),
     () => db.execute(sql`
       select coalesce(p.full_name, p.email, 'unknown') as who, count(*)::int as n, max(s.created_at) as last_at
@@ -103,6 +103,15 @@ export async function GET() {
              coalesce(p.full_name, p.email, 'unknown') as who
       from mentor_calls c join profiles p on p.id = c.profile_id
       order by c.created_at desc limit 15`),
+    // newest signups — who just joined. Scrollable list (up to 50), with a couple
+    // of "did they activate" signals so the operator can see engagement at a glance.
+    () => db.execute(sql`
+      select coalesce(p.full_name, p.email, 'anon') as who, p.email,
+             p.created_at, (p.linkedin_sub is not null) as linkedin,
+             (select count(*)::int from experiences e where e.profile_id = p.id) as exp,
+             (select count(*)::int from sources s where s.profile_id = p.id and s.kind = 'mentor_call') as calls,
+             (select count(*)::int from applications a where a.profile_id = p.id) as applied
+      from profiles p order by p.created_at desc limit 50`),
   ]);
 
   return NextResponse.json({
@@ -115,6 +124,7 @@ export async function GET() {
     spendByUser,
     agents,
     recentRuns,
+    latestUsers,
     mentorDiary: { lane: queueStatus(), insights: mentorInsights, pastCalls },
   });
 }

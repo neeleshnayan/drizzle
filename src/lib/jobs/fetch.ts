@@ -80,27 +80,31 @@ export async function fetchRawJobs(opts?: { log?: (line: string) => void }): Pro
       continue;
     }
     const before = jobs.length;
-    jobs = jobs
-      .filter((j) => j.jd.length >= 80 && titleFilter.test(j.title) && !(titleExclude && titleExclude.test(j.title)))
-      .slice(0, perBoard);
+    // filter by title/JD first, but DON'T cap yet. Capping BEFORE dedup meant we
+    // re-inspected the same first `perBoard` postings every run and never reached
+    // postings N+1…M — so a board's pool froze at its first 30. Dedup, THEN cap.
+    const eligible = jobs.filter(
+      (j) => j.jd.length >= 80 && titleFilter.test(j.title) && !(titleExclude && titleExclude.test(j.title)),
+    );
     scanned += before;
-    matched += jobs.length;
-    log(`${c.source}:${c.slug} → taking ${jobs.length} of ${before} postings`);
-    if (!jobs.length) continue;
+    if (!eligible.length) {
+      log(`${c.source}:${c.slug} → 0 eligible of ${before}`);
+      continue;
+    }
 
-    // skip ones we already have (by external_id) so we don't clobber vectors
-    const ids = jobs.map((j) => j.externalId);
+    // skip ones we already have (by external_id), THEN take up to perBoard NEW
+    // ones — each run pulls fresh postings until the board is exhausted.
+    const ids = eligible.map((j) => j.externalId);
     const existing = await db
       .select({ externalId: opportunities.externalId })
       .from(opportunities)
       .where(inArray(opportunities.externalId, ids));
     const have = new Set(existing.map((e) => e.externalId));
 
-    const fresh = jobs.filter((j) => !have.has(j.externalId));
-    if (!fresh.length) {
-      log(`  (all ${jobs.length} already in DB)`);
-      continue;
-    }
+    const fresh = eligible.filter((j) => !have.has(j.externalId)).slice(0, perBoard);
+    matched += fresh.length;
+    log(`${c.source}:${c.slug} → ${fresh.length} new (of ${eligible.length} eligible / ${before} fetched)`);
+    if (!fresh.length) continue;
     // one bulk insert; onConflictDoNothing covers a race with another fetch
     const res = await db
       .insert(opportunities)

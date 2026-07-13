@@ -247,9 +247,9 @@ export default async function LoginPage({ searchParams }: { searchParams: Promis
         <section id="community" style={{ position: "relative", zIndex: 1, background: "#1A1712", borderTop: "1px solid rgba(230,210,170,0.07)", padding: "clamp(72px,10vw,120px) clamp(20px,5vw,40px)" }}>
           <div style={{ maxWidth: 1160, margin: "0 auto" }}>
             <div style={{ maxWidth: 660, marginBottom: 40 }}>
-              <div style={kicker}>03 · You&apos;re not the first</div>
-              <h2 style={{ ...h2Serif, fontSize: "clamp(30px,4.6vw,50px)", lineHeight: 1.08, margin: "0 0 20px" }}>Walk the path with people <span style={{ fontStyle: "italic", color: "#D98E6A" }}>already on it.</span></h2>
-              <p style={{ fontSize: 16.5, lineHeight: 1.6, color: "#A79E8D", margin: 0, maxWidth: 600 }}>drizzle introduces you to people a step or two ahead on your exact path — for honest advice, warm intros, and proof the leap is makeable.</p>
+              <div style={kicker}>03 · Your circle</div>
+              <h2 style={{ ...h2Serif, fontSize: "clamp(30px,4.6vw,50px)", lineHeight: 1.08, margin: "0 0 20px" }}>Build a professional network that <span style={{ fontStyle: "italic", color: "#D98E6A" }}>truly matters.</span></h2>
+              <p style={{ fontSize: 16.5, lineHeight: 1.6, color: "#A79E8D", margin: 0, maxWidth: 600 }}>Not a feed of strangers — drizzle introduces you to people a step or two ahead on your exact path, for honest advice, warm intros, and proof the leap is makeable.</p>
             </div>
 
             {/* you are here */}
