@@ -110,11 +110,21 @@ export type LearnedDrift = {
 };
 const clamp01 = (n: number) => Math.min(1, Math.max(0, n));
 
-// cosine → the 0.5–1 trajectory band, via the FIXED nomic calibration (see
-// lib/embeddings for the derivation). Inlined here so rank-core stays free of
-// any module that reads process.env at load — the Deno ranker imports this tree.
-const COS_LO = 0.62;
-const COS_HI = 0.8;
+// cosine → the 0.5–1 trajectory band. Calibrated for bge-m3 (the model both the
+// pool's embedding_bge and the direction vector now use). bge cosines sit LOWER
+// and tighter than nomic — pooled across 10 directions × the pool (2026-07-13,
+// tools/bge-calibrate): p50≈0.415, p90≈0.485, p99≈0.566. LO=p50 (off-direction
+// floors at 0.5). HI=0.68 = the real TOP-match ceiling: per-direction maxes reach
+// 0.66–0.70 (a direction matching its own family — e.g. PM→PM=0.663), so pooled
+// p99 (0.566) as HI would saturate the whole genuine leaderboard (0.57–0.70) to
+// 1.0 and lose all separation among the best roles (the anchor career_changer
+// PM-vs-sales tie caught this). Linear across [0.41, 0.68] keeps off-direction at
+// 0.5, the mid-tier lifted, and the leaders spread. (The OLD nomic 0.62/0.80 here
+// flattened EVERY bge trajectory to 0.5.) Inlined so rank-core stays free of any
+// env-reading module — the Deno ranker imports this tree. Re-run bge-calibrate +
+// anchors after any embed change.
+const COS_LO = 0.41;
+const COS_HI = 0.68;
 /** cosine similarity → trajectory score. Below the floor reads 0.5 (a miss
  *  dents, never buries), dead-on reads ~1.0. */
 export function trajectoryFromCosine(cos: number): number {

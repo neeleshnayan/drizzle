@@ -13,7 +13,7 @@ import { sql } from "drizzle-orm";
 import { withScopedDb } from "@/db";
 import { computeAndSaveScoring, recomputeScoringInBackground } from "@/lib/scoring/persist";
 import { TRUSTED_MODELS } from "@/lib/jobs/vectorize";
-import { embed, directionEmbedText } from "@/lib/embeddings";
+import { embedBge } from "@/lib/embeddings";
 import { rankFromInputs, type RankedJob, type RankOutcome, type RpcInputs } from "./rank-core";
 import type { ScoringVector } from "@/lib/scoring/schema";
 
@@ -107,22 +107,26 @@ export async function rankMatchesWithMeta(userId: string, opts?: { wait?: boolea
   }
   if (!base) return empty;
 
-  // Node has nomic: embed the direction live and fill each pool row's trajDist
-  // with a tiny (id, distance) query — the 768-float vectors never leave
-  // Postgres. (On CF the Edge ranker uses the stored profiles.direction_vec.)
+  // Embed the user's direction live with bge-m3 and fill each pool row's trajDist
+  // with a tiny (id, distance) query — the 1024-float vectors never leave
+  // Postgres. bge BOTH sides: local ollama here, OpenRouter on CF (same space as
+  // the pool's embedding_bge). This mirrors the get_ranking_inputs RPC, which the
+  // Edge ranker drives off the stored profiles.direction_bge; here we override
+  // with a FRESH embed of the current direction.
   const targetRole = (inputs.themes ?? []).find((a) => a?.kind === "target_role" && a.role && !a.pending)?.role ?? "";
   const aspireSents = (inputs.insights ?? [])
     .filter((r) => r.dimension === "aspiration" || r.dimension === "value")
     .slice(0, 3).map((r) => r.content ?? "").filter(Boolean);
-  const directionText = directionEmbedText(targetRole, aspireSents);
+  // bge is symmetric — plain text, no "search_query:" prefix (that was nomic).
+  const directionText = [targetRole && `Target role: ${targetRole}.`, ...aspireSents].filter(Boolean).join(" ").trim();
   if (directionText && (inputs.pool ?? []).length) {
     try {
-      const directionVec = (await embed([directionText]))[0];
+      const directionVec = (await embedBge([directionText]))[0];
       if (directionVec) {
         const lit = `[${directionVec.join(",")}]`;
         const ids = inputs.pool.map((p) => p.id);
         const distRes = await withScopedDb((d) =>
-          d.execute(sql`SELECT id, (embedding_vec <=> ${lit}::vector)::float8 AS d FROM opportunities WHERE id = ANY(${pgArrayLit(ids)}::uuid[]) AND embedding_vec IS NOT NULL`),
+          d.execute(sql`SELECT id, (embedding_bge <=> ${lit}::vector)::float8 AS d FROM opportunities WHERE id = ANY(${pgArrayLit(ids)}::uuid[]) AND embedding_bge IS NOT NULL`),
         );
         const distMap = new Map(rows<{ id: string; d: number }>(distRes).map((r) => [r.id, r.d]));
         for (const p of inputs.pool) p.trajDist = distMap.get(p.id) ?? p.trajDist ?? null;

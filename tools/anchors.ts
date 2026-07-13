@@ -23,7 +23,9 @@ type Rec = { gate: number; desire: number; evidence: number | null; trajectory: 
 async function main() {
   const { scoreMatch } = await import("../src/lib/opportunities/match");
   const { blendCore, relevanceDamp } = await import("../src/lib/opportunities/blend");
-  const { embed, cosine, trajectoryFromCosine } = await import("../src/lib/embeddings");
+  const { embedBge, cosine } = await import("../src/lib/embeddings");
+  // use the PRODUCTION trajectory curve (bge-calibrated), not embeddings.ts's nomic one
+  const { trajectoryFromCosine } = await import("../src/lib/opportunities/rank-core");
   const { PROFILES } = await import("./profiles");
 
   const fixtures = JSON.parse(readFileSync("tools/fixtures/anchors.json", "utf8")) as Fixture[];
@@ -31,8 +33,9 @@ async function main() {
   const norm = (s: unknown) => String(s ?? "").toLowerCase().trim();
   const have = (mine: string[], s: string) => mine.some((m) => m === s || m.includes(s) || s.includes(m));
 
-  // one embedding per profile direction — the SAME trajectory production uses
-  const dirVecs = await embed(PROFILES.map((p) => `search_query: ${p.direction}`));
+  // one bge embedding per profile direction — the SAME trajectory production uses
+  // (bge symmetric → plain text, no "search_query:" prefix)
+  const dirVecs = await embedBge(PROFILES.map((p) => p.direction));
   const dirByKey = new Map(PROFILES.map((p, i) => [p.key, dirVecs[i]]));
 
   // score every (profile, fixture) once

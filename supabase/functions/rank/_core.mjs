@@ -198,8 +198,20 @@ var ALIASES = {
   "registered nurse": "rn",
   "professional engineer": "pe"
 };
+var INTERNSHIP = /\b(intern|internship|trainee|apprentice(ship)?|co-?op|working student|praktikum|summer analyst)\b/i;
+var ENTRY_LEVEL = /\b(entry[ -]?level|junior|jr\.?|new grad(uate)?|grad(uate)? (scheme|programme|program|analyst|trainee)|early[ -]?career)\b/i;
 function hardGate(role, cand) {
   const f = role.facts ?? {};
+  const title = role.title ?? f.title ?? "";
+  const yrs = cand.yearsExperience;
+  if (yrs !== null) {
+    if (INTERNSHIP.test(title) && yrs >= 3) {
+      return { pass: false, reason: `an internship \u2014 you're at ${yrs} yrs` };
+    }
+    if (ENTRY_LEVEL.test(title) && yrs >= 8) {
+      return { pass: true, marginal: { penalty: 0.6, gap: `An entry-level role \u2014 well below your ${yrs} yrs` } };
+    }
+  }
   const requiredCreds = (f.required_credentials ?? []).map((c) => c.toLowerCase().trim()).map((c) => c in SATISFIES ? c : ALIASES[c]).filter((c) => !!c);
   for (const req of requiredCreds) {
     if (!SATISFIES[req].some((c) => cand.credentials.has(c))) {
@@ -441,8 +453,8 @@ var AXIS_PAIRS = [
   ["pivot_appetite", "off_domain_novelty"]
 ];
 var clamp01 = (n) => Math.min(1, Math.max(0, n));
-var COS_LO = 0.62;
-var COS_HI = 0.8;
+var COS_LO = 0.41;
+var COS_HI = 0.68;
 function trajectoryFromCosine(cos) {
   return 0.5 + 0.5 * clamp01((cos - COS_LO) / (COS_HI - COS_LO));
 }
@@ -599,7 +611,7 @@ function rankFromInputs(inputs, base) {
   const ranked = roles.map((r) => {
     const v = r.vector ?? {};
     const f = r.facts ?? {};
-    const gate = hardGate({ facts: f }, quals);
+    const gate = hardGate({ facts: f, title: r.title }, quals);
     if (!gate.pass)
       return null;
     const m = scoreMatch(vec, v);

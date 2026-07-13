@@ -9,8 +9,9 @@
  * stays in TypeScript.
  *
  * p_direction: the user's direction embedding as a pgvector literal ('[f,f,…]').
- * When present, the pool rows carry trajDist = cosine distance (embedding_vec
- * <=> direction) computed in-DB — the 768-float vectors never leave Postgres.
+ * When present, the pool rows carry trajDist = cosine distance (embedding_bge
+ * <=> direction) computed in-DB — the 1024-float bge vectors never leave
+ * Postgres. (bge-m3 both sides now: the pool's embedding_bge + direction_bge.)
  *
  * Idempotent (CREATE OR REPLACE). SECURITY DEFINER + EXECUTE revoked from
  * anon/authenticated: only the service connection (the app) may call it.
@@ -29,10 +30,11 @@ function loadEnvLocal() {
 }
 
 const FN = `
--- the user's DIRECTION embedding, maintained by the ingestion box (nomic) when
--- a mentor call sets/updates the target role. Lets the Edge ranker (no nomic)
--- still compute semantic trajectory; Node overrides it with a live embed.
-ALTER TABLE profiles ADD COLUMN IF NOT EXISTS direction_vec vector(768);
+-- the user's DIRECTION embedding (bge-m3, 1024d), maintained when a mentor call
+-- sets/updates the target role. Lets the Edge ranker (which can reach OpenRouter
+-- bge but not local nomic) compute semantic trajectory; Node overrides it with a
+-- live bge embed. Same space as the pool's embedding_bge.
+ALTER TABLE profiles ADD COLUMN IF NOT EXISTS direction_bge vector(1024);
 
 CREATE OR REPLACE FUNCTION get_ranking_inputs(p_user uuid, p_trusted text[], p_direction text DEFAULT NULL)
 RETURNS jsonb
@@ -41,8 +43,8 @@ SET search_path = public
 AS $fn$
 WITH me AS (
   SELECT id, scoring, scoring_stale, preferences, about_overrides,
-         -- explicit p_direction (Node's live embed) wins; else the stored vector
-         coalesce(p_direction::vector, direction_vec) AS dir
+         -- explicit p_direction (Node's live bge embed) wins; else the stored vector
+         coalesce(p_direction::vector, direction_bge) AS dir
   FROM profiles WHERE user_id = p_user LIMIT 1
 )
 SELECT jsonb_build_object(
@@ -79,8 +81,8 @@ SELECT jsonb_build_object(
                  o.comp_min AS "compMin", o.comp_max AS "compMax",
                  o.domain, o.url, o.source, o.vector, o.facts,
                  left(o.raw_text, 300) AS "rawText",
-                 CASE WHEN (SELECT dir FROM me) IS NOT NULL AND o.embedding_vec IS NOT NULL
-                      THEN (o.embedding_vec <=> (SELECT dir FROM me))::float8 END AS "trajDist"
+                 CASE WHEN (SELECT dir FROM me) IS NOT NULL AND o.embedding_bge IS NOT NULL
+                      THEN (o.embedding_bge <=> (SELECT dir FROM me))::float8 END AS "trajDist"
           FROM opportunities o
           WHERE o.vectorized_at IS NOT NULL
             AND (o.vectorize_model = ANY(p_trusted) OR o.source = 'sample')

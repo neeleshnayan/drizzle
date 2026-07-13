@@ -1,16 +1,17 @@
 /**
- * direction_vec sweep — the ingestion-box job that gives the Cloudflare Edge
+ * direction_bge sweep — the ingestion-box job that gives the Cloudflare Edge
  * ranker SEMANTIC trajectory. For every profile with an agreed target role, build
- * the direction text (target + aspiration/value insights), embed it with local
- * nomic, and store it in profiles.direction_vec. The Edge ranker (no nomic) then
- * reads that vector and computes trajectory in-DB. Idempotent; run after crunches
- * / mentor calls. See docs/adr-001-ranking-funnel.md + the CF ranking memory.
+ * the direction text (target + aspiration/value insights), embed it with bge-m3,
+ * and store it in profiles.direction_bge (1024d, same space as the pool's
+ * embedding_bge). The Edge ranker reads that vector and computes trajectory
+ * in-DB. Idempotent; run after crunches / mentor calls. See
+ * docs/adr-001-ranking-funnel.md + the CF ranking memory.
  *
  *   npx tsx tools/direction-vec-sweep.ts            # all profiles with a target
  *   npx tsx tools/direction-vec-sweep.ts --user <uuid>   # one user
  */
 import { readFileSync } from "node:fs";
-import { embed, directionEmbedText } from "@/lib/embeddings";
+import { embedBge } from "@/lib/embeddings";
 
 function loadEnvLocal() {
   for (const line of readFileSync(".env.local", "utf8").split(/\r?\n/)) {
@@ -51,12 +52,13 @@ async function main() {
       ORDER BY created_at DESC LIMIT 3`;
     const aspireSents = ins.map((r) => r.content ?? "").filter(Boolean);
 
-    const text = directionEmbedText(target, aspireSents);
+    // bge is symmetric — plain text, no "search_query:" prefix (that was nomic)
+    const text = [target && `Target role: ${target}.`, ...aspireSents].filter(Boolean).join(" ").trim();
     if (!text) { skipped++; continue; }
     try {
-      const vec = (await embed([text]))[0];
+      const vec = (await embedBge([text]))[0];
       if (!vec?.length) { skipped++; continue; }
-      await sql`UPDATE profiles SET direction_vec = ${`[${vec.join(",")}]`}::vector WHERE id = ${p.id}`;
+      await sql`UPDATE profiles SET direction_bge = ${`[${vec.join(",")}]`}::vector WHERE id = ${p.id}`;
       set++;
       console.log(`  ✓ ${p.userId.slice(0, 8)}… → "${target || aspireSents[0]?.slice(0, 40)}"`);
     } catch (e) {
