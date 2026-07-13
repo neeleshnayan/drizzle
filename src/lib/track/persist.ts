@@ -3,7 +3,7 @@
  * a theme is a strategic angle, a version is a frozen résumé snapshot under it,
  * an application records where a version was sent, and events are the funnel.
  */
-import { and, asc, desc, eq } from "drizzle-orm";
+import { and, asc, desc, eq, sql } from "drizzle-orm";
 import { db } from "@/db";
 import {
   profiles,
@@ -18,8 +18,10 @@ import {
   applications,
   applicationEvents,
   opportunities,
+  insights,
 } from "@/db/schema";
 import { getFullProfile } from "@/lib/profile/read";
+import { embedBge } from "@/lib/embeddings";
 
 async function profileIdFor(userId: string): Promise<string> {
   const [p] = await db.select({ id: profiles.id }).from(profiles).where(eq(profiles.userId, userId)).limit(1);
@@ -84,6 +86,31 @@ export function distillDirection(raw: string): string {
   return s || raw.trim();
 }
 
+/** Recompute + store the user's bge direction vector (profiles.direction_bge) so
+ *  the Cloudflare Edge ranker gets live semantic trajectory without a manual
+ *  sweep. Mirrors tools/direction-vec-sweep for one user. direction_bge lives in
+ *  the DB but not the Drizzle schema, so the write is raw SQL. Best-effort — the
+ *  sweep tool remains the backstop. */
+async function refreshDirectionBge(pid: string, role: string) {
+  try {
+    const asp = await db
+      .select({ content: insights.content })
+      .from(insights)
+      .where(and(eq(insights.profileId, pid), sql`${insights.dimension} in ('aspiration','value')`))
+      .orderBy(desc(insights.createdAt))
+      .limit(3);
+    const aspSents = asp.map((r) => r.content ?? "").filter(Boolean);
+    // bge is symmetric — plain text, no "search_query:" prefix
+    const text = [role && `Target role: ${role}.`, ...aspSents].filter(Boolean).join(" ").trim();
+    if (!text) return;
+    const [vec] = await embedBge([text]);
+    if (!vec?.length) return;
+    await db.execute(sql`UPDATE profiles SET direction_bge = ${`[${vec.join(",")}]`}::vector WHERE id = ${pid}`);
+  } catch {
+    /* best-effort — direction-vec-sweep is the backstop */
+  }
+}
+
 export async function fillTargetTheme(userId: string, rawRole: string, rationale: string) {
   const role = distillDirection(rawRole); // JD → trajectory
   const pid = await profileIdFor(userId);
@@ -106,6 +133,8 @@ export async function fillTargetTheme(userId: string, rawRole: string, rationale
     // safety: a user whose starter themes never seeded still gets a target theme
     await db.insert(resumeThemes).values({ profileId: pid, name: `Target: ${role}`, latentAttributes });
   }
+  // keep the CF Edge ranker's direction vector fresh (bge) for this new direction
+  await refreshDirectionBge(pid, role);
   return { ok: true as const };
 }
 
