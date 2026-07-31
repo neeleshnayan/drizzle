@@ -172,6 +172,44 @@ export default function MentorCall({ userId }: { userId: string }) {
   const circleRef = useRef<CircleMentor[]>([]);
   const [mentorCards, setMentorCards] = useState<CircleMentor[] | null>(null);
   const [introState, setIntroState] = useState<Record<string, "sending" | "sent">>({});
+
+  // Dev-only screenshot seam. `?shot=cards` holds the stage in the mid-call
+  // moment the role cards surface, using the REAL spectrum from the matches
+  // API — so tools/shoot-screens.ts can capture tool-calling without a live
+  // call (no mic, no turn spent). Never reachable in production.
+  useEffect(() => {
+    if (process.env.NODE_ENV === "production") return;
+    if (new URLSearchParams(window.location.search).get("shot") !== "cards") return;
+    let cancelled = false;
+    void (async () => {
+      const j = await fetch(`/api/opportunities/matches?u=${userId}`)
+        .then((r) => r.json())
+        .catch(() => null);
+      if (cancelled || !j) return;
+      type SpectrumRow = { kind: string; job: { title: string | null; company: string | null; why: string } };
+      const fromSpectrum: CallRole[] = (j.spectrum ?? []).map((s: SpectrumRow) => ({
+        kind: s.kind,
+        title: s.job.title ?? "",
+        company: s.job.company ?? "",
+        why: s.job.why,
+      }));
+      // the spectrum is only populated once a direction exists — fall back to
+      // the top matches so the shot is never an empty stage
+      const roles = fromSpectrum.length
+        ? fromSpectrum
+        : ((j.matches ?? []) as { title: string | null; company: string | null; why: string }[])
+            .slice(0, 3)
+            .map((m) => ({ kind: "a match", title: m.title ?? "", company: m.company ?? "", why: m.why }));
+      if (!roles.length) return;
+      setLive(true);
+      enter("speaking");
+      setSpokenText("Three of these keep coming back to your direction — which one pulls at you?");
+      setRoleCards(roles);
+    })();
+    return () => { cancelled = true; };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [userId]);
+
   async function requestIntroInCall(mentorId: string) {
     setIntroState((s) => ({ ...s, [mentorId]: "sending" }));
     try {
