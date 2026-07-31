@@ -1,5 +1,8 @@
 node_modules/
 .claude/
+# Agent tooling docs, same category as .claude/ — 399 files / 2.7MB of vendor
+# reference material that was committed by accident, not project source.
+.agents/
 .next/
 out/
 build/

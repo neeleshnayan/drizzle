@@ -102,7 +102,7 @@ async function main() {
     runAgent(resumeExtractor, { rawText, images: [] }, { userId: uid, profileId }),
   );
   await step("4. persist extraction (experiences/skills/…)", async () =>
-    persistExtraction({ userId: uid, extraction, rawText, storagePath: undefined }),
+    persistExtraction({ userId: uid, extraction, rawText, storagePath: null }),
   );
   await step("5. seed starter themes (Default + TBD target)", async () => ensureStarterThemes(uid));
 

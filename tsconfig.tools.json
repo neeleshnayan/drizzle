@@ -1,0 +1,10 @@
+// tools/ is deliberately OUTSIDE the app's tsconfig include (it must never end
+// up in the Next build), which meant nothing ever typechecked it — scripts kept
+// compiling in your head while referencing functions and columns that had been
+// deleted months earlier. This config exists purely so `npm run typecheck:tools`
+// can catch that rot.
+{
+  "extends": "./tsconfig.json",
+  "include": ["tools/**/*.ts", "src/**/*.ts"],
+  "exclude": ["node_modules"]
+}
