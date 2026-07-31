@@ -17,3 +17,20 @@ logs/
 .drizzle/
 next-env.d.ts
 tsconfig.tsbuildinfo
+
+# Stray personal/business documents and database dumps. These landed in the
+# repo root once (employment records, a tax form, a 14MB pg cluster dump) and
+# were one `git add -A` away from being published. The repo tracks no PDFs,
+# archives or saved HTML, so blanket-ignoring them costs nothing.
+# Real documents belong in ~/Documents/personal-docs; dumps in ~/jolly-backups.
+# Anchored to the repo ROOT (a leading slash): that is where strays land, and
+# an unanchored *.sql would have swallowed the tracked drizzle/ migrations.
+/*.pdf
+/*.html
+/*.gz
+/*.zip
+/*.backup
+/*.dump
+/*.sql
+/*.csv
+/*.xlsx
