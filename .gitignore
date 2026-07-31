@@ -37,3 +37,6 @@ tsconfig.tsbuildinfo
 /*.sql
 /*.csv
 /*.xlsx
+
+# incremental build info from tsconfig.tools.json
+*.tsbuildinfo
